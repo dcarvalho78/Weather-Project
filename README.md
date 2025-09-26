@@ -7,4 +7,4 @@ Quick start (dev):
   python manage.py migrate
   python manage.py runserver 0.0.0.0:8000
 
-For deployment, follow the nginx/gunicorn instructions provided earlier in the chat.
+
