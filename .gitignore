@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.sqlite3
+*.log
+.env
+.env*
+gunicorn.sock
+*.pem
+*.key
+static/
+staticfiles/
