@@ -2,6 +2,11 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.conf import settings
 from .models import WeatherReading
+from .utils import get_weather_emoji
+from types import SimpleNamespace
+from django.core.paginator import Paginator
+from django.shortcuts import render, get_object_or_404
+
 
 def _safe_float(v):
     try:
@@ -9,11 +14,13 @@ def _safe_float(v):
     except Exception:
         return None
 
+
 def _f_to_c(f):
     try:
         return (float(f) - 32.0) * 5.0/9.0
     except Exception:
         return None
+
 
 def parse_ecowitt_payload(payload: dict):
     out = {}
@@ -87,10 +94,11 @@ def parse_ecowitt_payload(payload: dict):
 
     return out
 
+
 @csrf_exempt
 def ecowitt_listener(request):
     if request.method == "GET":
-        return JsonResponse({"status":"ok","msg":"ecowitt endpoint alive"})
+        return JsonResponse({"status": "ok", "msg": "ecowitt endpoint alive"})
 
     if request.method != "POST":
         return HttpResponseBadRequest("POST expected")
@@ -99,37 +107,82 @@ def ecowitt_listener(request):
     if token_required:
         token = request.GET.get("token") or request.POST.get("token")
         if token != token_required:
-            return JsonResponse({"status":"error","msg":"bad token"}, status=403)
+            return JsonResponse({"status": "error", "msg": "bad token"}, status=403)
 
     ip_whitelist = getattr(settings, "ECOWITT_ALLOWED_IPS", None)
     if ip_whitelist:
         remote = request.META.get("REMOTE_ADDR")
         if remote not in ip_whitelist:
-            return JsonResponse({"status":"error","msg":"ip not allowed"}, status=403)
+            return JsonResponse({"status": "error", "msg": "ip not allowed"}, status=403)
 
     form = request.POST.dict()
     parsed = parse_ecowitt_payload(form)
 
-    reading = WeatherReading.objects.create(
-        stationtype = parsed.get("stationtype"),
-        station_id = parsed.get("station_id"),
-        temp_c = parsed.get("temp_c"),
-        humidity = parsed.get("humidity"),
-        wind_dir = parsed.get("wind_dir"),
-        wind_speed_mps = parsed.get("wind_speed_mps"),
-        rain_mm = parsed.get("rain_mm"),
-        pressure_hpa = parsed.get("pressure_hpa"),
-        uv = parsed.get("uv"),
-        battery = parsed.get("battery"),
-        raw = form
-    )
-    return JsonResponse({"status":"ok","id": reading.id})
-# -- added: simple dashboard view (appends safely) --
-from django.shortcuts import render
+    is_raining = False
+    if parsed.get("rain_mm") is not None and parsed["rain_mm"] > 0:
+        is_raining = True
 
-def dashboard_view(request):
-    # lokale Importe, damit Datei-Importe keine AppRegistry-Probleme verursachen
-    from .models import WeatherReading
-    readings = WeatherReading.objects.order_by("-id")[:50]
-    return render(request, "weather/dashboard.html", {"readings": readings})
-# -- end added --
+    reading = WeatherReading.objects.create(
+        stationtype=parsed.get("stationtype"),
+        station_id=parsed.get("station_id"),
+        temp_c=parsed.get("temp_c"),
+        humidity=parsed.get("humidity"),
+        wind_dir=parsed.get("wind_dir"),
+        wind_speed_mps=parsed.get("wind_speed_mps"),
+        rain_mm=parsed.get("rain_mm"),
+        pressure_hpa=parsed.get("pressure_hpa"),
+        uv=parsed.get("uv"),
+        battery=parsed.get("battery"),
+        raw=form,
+        is_raining=is_raining
+    )
+    return JsonResponse({"status": "ok", "id": reading.id})
+
+
+def make_weather_proxy(reading):
+    """
+    Baut ein Proxy-Objekt für classify_weather() und get_weather_emoji().
+    """
+
+    cloud_cover = None
+    if reading.raw:
+        for key in ("cloud_cover", "clouds", "cloud", "cloudiness"):
+            if key in reading.raw:
+                try:
+                    cloud_cover = float(reading.raw[key])
+                except Exception:
+                    cloud_cover = None
+                break
+
+    return SimpleNamespace(
+        temp_c=reading.temp_c or 0,
+        humidity=reading.humidity or 0,
+        wind_speed=reading.wind_speed_mps or 0,
+        uv_index=reading.uv or 0,
+        is_raining=reading.is_raining,
+        is_snowing=(reading.temp_c is not None and reading.temp_c <= 0 and reading.is_raining),
+        cloud_cover=cloud_cover
+    )
+
+
+def dashboard(request):
+    readings = WeatherReading.objects.order_by("-received_at")
+    paginator = Paginator(readings, 5)
+    page_number = request.GET.get("page")
+    page_obj = paginator.get_page(page_number)
+
+    for r in page_obj:
+        proxy = make_weather_proxy(r)
+        r.emoji = get_weather_emoji(proxy)
+
+    return render(request, "weather/dashboard.html", {"page_obj": page_obj})
+
+
+def weather_detail(request, pk):
+    reading = get_object_or_404(WeatherReading, pk=pk)
+    proxy = make_weather_proxy(reading)
+    emoji = get_weather_emoji(proxy)
+    return render(request, "weather/weather_detail.html", {
+        "reading": reading,
+        "emoji": emoji
+    })

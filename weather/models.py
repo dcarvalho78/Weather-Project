@@ -16,6 +16,7 @@ class WeatherReading(models.Model):
     humidity = models.IntegerField(blank=True, null=True)
     wind_dir = models.IntegerField(blank=True, null=True)
     wind_speed_mps = models.FloatField(blank=True, null=True)
+    is_raining = models.BooleanField(default=False)
     rain_mm = models.FloatField(blank=True, null=True)
     pressure_hpa = models.FloatField(blank=True, null=True)
     uv = models.FloatField(blank=True, null=True)
